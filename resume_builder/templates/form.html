@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>AI Resume Builder</title>
+</head>
+<body>
+    <h1>AI Resume Builder</h1>
+    <form action="/generate/" method="post">
+        {% csrf_token %}
+        <label>Full Name:</label><br>
+        <input type="text" name="name" required><br>
+        <label>Experience:</label><br>
+        <textarea name="experience" rows="5"></textarea><br>
+        <label>Skills:</label><br>
+        <input type="text" name="skills"><br>
+        <label>Education:</label><br>
+        <input type="text" name="education"><br><br>
+        <button type="submit">Generate Resume</button>
+    </form>
+</body>
+</html>
