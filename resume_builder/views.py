@@ -1,166 +1,100 @@
 from django.shortcuts import render
 from django.http import HttpResponse
-from transformers import pipeline
+from decouple import config
+import openai
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import LETTER
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfbase import pdfmetrics
-import re
-import logging
 
-logging.getLogger("transformers").setLevel(logging.ERROR)
+# Load OpenAI API key from .env
+openai.api_key = config("OPENAI_API_KEY")
 
-# Load GPT-2 model
-generator = pipeline(
-    "text-generation",
-    model="gpt2-medium"
-)
-generator.tokenizer.pad_token_id = generator.model.config.eos_token_id
+def generate_ai_resume(data):
+    prompt = f"""
+Create a professional USA-standard resume for:
 
-# ------------------------------
-# Helper Functions
-# ------------------------------
+Name: {data['name']}
+Email: {data['email']}
+Phone: {data['phone']}
+Address: {data['address']}
+Objective: {data['objective']}
+Skills: {data['skills']}
+Experience: {data['experience']}
+Education: {data['education']}
+Languages: {data['languages']}
 
-def remove_repetition(text):
-    lines = text.split("\n")
-    seen = set()
-    cleaned = []
-    for line in lines:
-        stripped = line.strip()
-        if stripped and stripped not in seen:
-            cleaned.append(stripped)
-            seen.add(stripped)
-    return "\n".join(cleaned)
-
-def clean_text(text):
-    # Remove extra whitespace and unwanted characters
-    text = re.sub(r'\s+\n', '\n', text)
-    text = re.sub(r'\n{2,}', '\n', text)
-    return text.strip()
-
-def format_resume_prompt(name, experience, skills, education, age):
-    return f"""
-You are an AI that writes professional resumes. 
-Write a clean, professional resume in plain text. Include:
-
-- Short summary paragraph at the top.
-- Bullet points for each experience and skill.
-- Sections with clear headings: Name, Summary, Experience, Skills, Education, Age.
-- Do not include any unrelated text, commentary, or ads.
-
-Name: {name}
-Experience: {experience}
-Skills: {skills}
-Education: {education}
-Age: {age}
+Format it in clean sections with bullet points, headings, and proper spacing. 
+Do not include extra commentary.
 """
+    response = openai.chat.completions.create(
+        model="gpt-4",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.5
+    )
+    resume_text = response.choices[0].message.content
+    return resume_text
 
-# ------------------------------
-# Views
-# ------------------------------
 
 def home(request):
-    # Pre-fill fields from session if available
-    context = {
-        "name": request.session.get("name", ""),
-        "experience": request.session.get("experience", ""),
-        "skills": request.session.get("skills", ""),
-        "education": request.session.get("education", ""),
-        "age": request.session.get("age", "")
-    }
-    return render(request, 'form.html', context)
+    return render(request, "form.html")
 
 
 def generate_resume(request):
-    name = "Habib"
-    experience = ""
-    skills = ""
-    education = ""
-    age = ""
-
     if request.method == "POST":
-        name = request.POST.get("name", "")
-        experience = request.POST.get("experience", "")
-        skills = request.POST.get("skills", "")
-        education = request.POST.get("education", "")
-        age = request.POST.get("age", "N/A")
+        data = {
+            "name": request.POST.get("name", "Habibullah Rahimi"),
+            "email": request.POST.get("email", "[email protected]"),
+            "phone": request.POST.get("phone", "[your phone]"),
+            "address": request.POST.get("address", "[your address]"),
+            "objective": request.POST.get("objective", "Web Developer seeking new challenges."),
+            "skills": request.POST.get("skills", "Python, Django, Laravel, HTML, CSS, JavaScript"),
+            "experience": request.POST.get("experience", "Web Developer at Company A, Web Developer at Company B"),
+            "education": request.POST.get("education", "Bachelor of Computer Science"),
+            "languages": request.POST.get("languages", "English"),
+        }
 
-        # Save input in session for pre-fill
-        request.session["name"] = name
-        request.session["experience"] = experience
-        request.session["skills"] = skills
-        request.session["education"] = education
-        request.session["age"] = age
+        resume_text = generate_ai_resume(data)
 
-        prompt = format_resume_prompt(name, experience, skills, education, age)
+        request.session["resume_text"] = resume_text
+        return render(request, "resume_preview.html", {"resume_text": resume_text})
 
-        # Generate resume with controlled output
-        result = generator(
-            prompt,
-            max_new_tokens=250,
-            temperature=0.5,   # Lower randomness for professional text
-            top_k=50,
-            top_p=0.95,
-            repetition_penalty=2.0
-        )[0]["generated_text"]
-
-        # Clean and deduplicate
-        result = remove_repetition(result)
-        result = clean_text(result)
-
-        request.session['resume_text'] = result
-        return render(request, "resume_preview.html", {"resume_text": result})
-
-    # For GET request, show form with pre-filled inputs
-    return render(request, "form.html", {
-        "name": name,
-        "experience": experience,
-        "skills": skills,
-        "education": education,
-        "age": age
-    })
+    return render(request, "form.html")
 
 
 def download_pdf(request):
-    resume_text = request.session.get('resume_text', '')
+    resume_text = request.session.get("resume_text")
     if not resume_text:
-        return HttpResponse("No resume generated yet.", status=400)
+        return HttpResponse("No resume found", status=400)
 
-    # ------------------------------
-    # ReportLab PDF generation
-    # ------------------------------
-    # Use a Unicode font to support all characters
-    pdfmetrics.registerFont(TTFont('DejaVu', '/System/Library/Fonts/Supplemental/DejaVuSans.ttf'))
+    pdfmetrics.registerFont(
+        TTFont("DejaVu", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
+    )
 
-    response = HttpResponse(content_type='application/pdf')
-    response['Content-Disposition'] = 'attachment; filename="resume.pdf"'
+    response = HttpResponse(content_type="application/pdf")
+    response["Content-Disposition"] = 'attachment; filename="resume.pdf"'
 
     c = canvas.Canvas(response, pagesize=LETTER)
-    width, height = LETTER
     c.setFont("DejaVu", 12)
 
+    width, height = LETTER
     y = height - 50
     for line in resume_text.split("\n"):
         line = line.strip()
         if not line:
             continue
-
-        # Bold headings if line ends with colon
-        if line.endswith(":"):
+        # Bold headings
+        if line.endswith(":") or line.isupper():
             c.setFont("DejaVu", 14)
         else:
             c.setFont("DejaVu", 12)
-
-        # Add bullet points
-        if line.startswith("-"):
-            line = "• " + line[1:].strip()
-
+        # Bullet points
+        if line.startswith("-") or line.startswith("•"):
+            line = "• " + line.lstrip("-• ")
         c.drawString(50, y, line)
         y -= 18
         if y < 50:
             c.showPage()
-            c.setFont("DejaVu", 12)
             y = height - 50
-
     c.save()
     return response
